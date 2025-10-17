@@ -125,7 +125,7 @@ obstacleImage.src = 'obstacle.png';
 let obstacles = [];
 const obstacleSpawnTimer = {
     current: 0,
-    interval: 60 // 障害物の出現間隔を短く（120→60）
+    interval: 120 // 障害物の出現間隔を長く（約2秒）
 };
 
 // ライフ表示を更新
@@ -155,7 +155,7 @@ function init() {
     gameSpeed = 3; // 初期スピードを遅く
     roadOffset = 0;
     obstacleSpawnTimer.current = 0;
-    obstacleSpawnTimer.interval = 60; // 障害物の出現間隔を短く
+    obstacleSpawnTimer.interval = 120; // 障害物の出現間隔を長く
     lives = 3;
     invincible = false;
     invincibleTimer = 0;
@@ -397,7 +397,7 @@ function gameLoop() {
         obstacleSpawnTimer.current = 0;
 
         // 難易度を徐々に上げる（子供向けに控えめに）
-        if (obstacleSpawnTimer.interval > 40) {
+        if (obstacleSpawnTimer.interval > 80) {
             obstacleSpawnTimer.interval -= 0.3;
         }
         if (gameSpeed < 6) {
