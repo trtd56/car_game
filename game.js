@@ -154,15 +154,34 @@ class Game {
         });
 
         // ボタンイベント
-        document.getElementById('startBtn').addEventListener('click', () => {
+        const startBtn = document.getElementById('startBtn');
+        startBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.start();
+        });
+        startBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
             this.start();
         });
 
-        document.getElementById('resetBtn').addEventListener('click', () => {
+        const resetBtn = document.getElementById('resetBtn');
+        resetBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.reset();
+        });
+        resetBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
             this.reset();
         });
 
-        document.getElementById('restartBtn').addEventListener('click', () => {
+        const restartBtn = document.getElementById('restartBtn');
+        restartBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.reset();
+            this.start();
+        });
+        restartBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
             this.reset();
             this.start();
         });
