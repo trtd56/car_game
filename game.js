@@ -96,22 +96,27 @@ class Game {
 
     // オーディオの設定
     setupAudio() {
-        // BGM
-        this.bgm = new Audio('sounds/bgm.mp3');
-        this.bgm.loop = true;
-        this.bgm.volume = 0.3;
+        try {
+            // BGM
+            this.bgm = new Audio('sounds/bgm.mp3');
+            this.bgm.loop = true;
+            this.bgm.volume = 0.3;
 
-        // 効果音
-        this.sounds.move = new Audio('sounds/move.mp3');
-        this.sounds.rotate = new Audio('sounds/rotate.mp3');
-        this.sounds.drop = new Audio('sounds/drop.mp3');
-        this.sounds.clear = new Audio('sounds/clear.mp3');
-        this.sounds.gameOver = new Audio('sounds/gameover.mp3');
+            // 効果音
+            this.sounds.move = new Audio('sounds/move.mp3');
+            this.sounds.rotate = new Audio('sounds/rotate.mp3');
+            this.sounds.drop = new Audio('sounds/drop.mp3');
+            this.sounds.clear = new Audio('sounds/clear.mp3');
+            this.sounds.gameOver = new Audio('sounds/gameover.mp3');
 
-        // 音量設定
-        Object.values(this.sounds).forEach(sound => {
-            sound.volume = 0.5;
-        });
+            // 音量設定
+            Object.values(this.sounds).forEach(sound => {
+                sound.volume = 0.5;
+            });
+        } catch (e) {
+            console.log('オーディオ設定エラー:', e);
+            // オーディオが利用できなくてもゲームは動作する
+        }
     }
 
     playSound(soundName) {
@@ -265,7 +270,14 @@ class Game {
             this.reset();
         }
 
-        this.bgm.play().catch(e => console.log('BGM再生エラー:', e));
+        // BGM再生を試みるが、失敗してもゲームは開始する
+        if (this.bgm) {
+            this.bgm.play().catch(e => {
+                console.log('BGM再生エラー:', e);
+                // エラーは無視してゲームを続行
+            });
+        }
+
         this.nextPiece = this.createPiece();
         this.spawnPiece();
         this.lastTime = performance.now();
@@ -292,8 +304,14 @@ class Game {
         document.getElementById('gameOver').classList.add('hidden');
         document.getElementById('startBtn').disabled = false;
 
-        this.bgm.pause();
-        this.bgm.currentTime = 0;
+        if (this.bgm) {
+            try {
+                this.bgm.pause();
+                this.bgm.currentTime = 0;
+            } catch (e) {
+                console.log('BGM停止エラー:', e);
+            }
+        }
 
         this.updateTouchControls();
     }
@@ -428,7 +446,15 @@ class Game {
 
     endGame() {
         this.gameOver = true;
-        this.bgm.pause();
+
+        if (this.bgm) {
+            try {
+                this.bgm.pause();
+            } catch (e) {
+                console.log('BGM停止エラー:', e);
+            }
+        }
+
         this.playSound('gameOver');
 
         document.getElementById('finalScore').textContent = this.score;
