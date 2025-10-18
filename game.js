@@ -1,474 +1,559 @@
-const canvas = document.getElementById('gameCanvas');
-const ctx = canvas.getContext('2d');
-const scoreElement = document.getElementById('score');
-const finalScoreElement = document.getElementById('finalScore');
-const gameOverScreen = document.getElementById('gameOver');
-const startScreen = document.getElementById('startScreen');
-const startBtn = document.getElementById('startBtn');
-const restartBtn = document.getElementById('restartBtn');
-const livesElement = document.getElementById('lives');
+// ゲーム設定
+const COLS = 10;
+const ROWS = 20;
+const BLOCK_SIZE = 30;
+const COLORS = [
+    null,
+    '#FF0D72', // I
+    '#0DC2FF', // O
+    '#0DFF72', // T
+    '#F538FF', // S
+    '#FF8E0D', // Z
+    '#FFE138', // J
+    '#3877FF'  // L
+];
 
-// 効果音を作成（Web Audio API）
-const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-
-function playCollisionSound() {
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-
-    oscillator.frequency.value = 100;
-    oscillator.type = 'sawtooth';
-
-    gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
-
-    oscillator.start(audioContext.currentTime);
-    oscillator.stop(audioContext.currentTime + 0.3);
-}
-
-// BGMを読み込む
-const bgm = new Audio();
-bgm.loop = true; // ループ再生
-bgm.volume = 0.3; // 音量を30%に設定
-bgm.src = 'bgm.mp3'; // BGMファイルのパスを指定（同じフォルダに「bgm.mp3」という名前で音楽ファイルを置く）
-
-// BGMを再生する関数
-function playBGM() {
-    bgm.play().catch(err => {
-        console.log('BGM再生エラー:', err);
-    });
-}
-
-// BGMを停止する関数
-function stopBGM() {
-    bgm.pause();
-    bgm.currentTime = 0;
-}
-
-// キャンバスサイズの設定
-function resizeCanvas() {
-    const container = document.getElementById('gameContainer');
-    canvas.width = container.offsetWidth;
-    canvas.height = container.offsetHeight;
-
-    // リサイズ後にプレイヤー位置も更新
-    if (gameState === 'playing') {
-        player.x = canvas.width / 2 - player.width / 2;
-        player.y = canvas.height - player.height - 100; // 画面下から100pxの位置に配置
-        player.targetX = player.x;
-    }
-}
-
-// ページ読み込み後に初期化
-window.addEventListener('load', () => {
-    resizeCanvas();
-});
-window.addEventListener('resize', resizeCanvas);
+// テトロミノの形状定義
+const SHAPES = [
+    [], // 空
+    [[1, 1, 1, 1]], // I
+    [[2, 2], [2, 2]], // O
+    [[0, 3, 0], [3, 3, 3]], // T
+    [[0, 4, 4], [4, 4, 0]], // S
+    [[5, 5, 0], [0, 5, 5]], // Z
+    [[6, 0, 0], [6, 6, 6]], // J
+    [[0, 0, 7], [7, 7, 7]]  // L
+];
 
 // ゲーム状態
-let gameState = 'start'; // 'start', 'playing', 'gameOver'
-let score = 0;
-let gameSpeed = 3; // スピードを落とす（5→3）
-let roadOffset = 0;
-let lives = 3; // ライフ
-let invincible = false; // 無敵時間
-let invincibleTimer = 0;
+class Game {
+    constructor() {
+        this.canvas = document.getElementById('gameCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.nextCanvas = document.getElementById('nextCanvas');
+        this.nextCtx = this.nextCanvas.getContext('2d');
 
-// プレイヤー
-const player = {
-    width: 200,
-    height: 200,
-    x: 0,
-    y: 0,
-    targetX: 0,
-    speed: 0.15,
-    slowdown: 1.0, // 減速係数（1.0=通常、0.3=減速中）
-    image: null,
-    useImage: false
-};
+        this.board = this.createBoard();
+        this.score = 0;
+        this.level = 1;
+        this.lines = 0;
+        this.gameOver = false;
+        this.dropCounter = 0;
+        this.dropInterval = 1000;
+        this.lastTime = 0;
 
-// プレイヤー画像を読み込む
-const playerImage = new Image();
-playerImage.onload = function() {
-    player.image = playerImage;
-    player.useImage = true;
+        this.currentPiece = null;
+        this.nextPiece = null;
 
-    // 画像の縦横比を計算して、200pxの範囲内に収める
-    const maxSize = 200;
-    const aspectRatio = playerImage.width / playerImage.height;
+        // カスタム画像用の配列
+        this.blockImages = {};
+        this.imagesLoaded = false;
 
-    if (aspectRatio > 1) {
-        // 横長の画像
-        player.width = maxSize;
-        player.height = maxSize / aspectRatio;
-    } else {
-        // 縦長または正方形の画像
-        player.height = maxSize;
-        player.width = maxSize * aspectRatio;
-    }
-};
-// 画像ファイルのパスを指定（同じフォルダに「player.png」という名前で画像を置く）
-playerImage.src = 'player.png';
+        // オーディオ
+        this.bgm = null;
+        this.sounds = {};
 
-// 障害物画像を読み込む
-const obstacleImage = new Image();
-let obstacleImageLoaded = false;
-obstacleImage.onload = function() {
-    obstacleImageLoaded = true;
-};
-// 画像ファイルのパスを指定（同じフォルダに「obstacle.png」という名前で画像を置く）
-obstacleImage.src = 'obstacle.png';
-
-// 障害物
-let obstacles = [];
-const obstacleSpawnTimer = {
-    current: 0,
-    interval: 180 // 障害物の出現間隔をさらに長く（約3秒）
-};
-
-// ライフ表示を更新
-function updateLivesDisplay() {
-    livesElement.innerHTML = '';
-    for (let i = 0; i < lives; i++) {
-        livesElement.innerHTML += '❤️';
-    }
-}
-
-// 道路の車線
-const roadLanes = 3;
-const roadWidth = 0.6; // キャンバス幅の60%
-
-// 初期化
-function init() {
-    // キャンバスサイズが正しく設定されているか確認
-    if (canvas.width === 0 || canvas.height === 0) {
-        resizeCanvas();
+        this.setupAudio();
+        this.loadBlockImages();
+        this.setupControls();
     }
 
-    player.x = canvas.width / 2 - player.width / 2;
-    player.y = canvas.height - player.height - 100; // 画面下から100pxの位置に配置
-    player.targetX = player.x;
-    obstacles = [];
-    score = 0;
-    gameSpeed = 3; // 初期スピードを遅く
-    roadOffset = 0;
-    obstacleSpawnTimer.current = 0;
-    obstacleSpawnTimer.interval = 180; // 障害物の出現間隔をさらに長く
-    lives = 3;
-    invincible = false;
-    invincibleTimer = 0;
-    player.slowdown = 1.0;
-    scoreElement.textContent = score;
-    updateLivesDisplay();
-
-}
-
-// 道路を描画
-function drawRoad() {
-    const roadX = canvas.width * (1 - roadWidth) / 2;
-    const roadWidthPx = canvas.width * roadWidth;
-
-    // 路肩
-    ctx.fillStyle = '#1a5c1a';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // 道路
-    ctx.fillStyle = '#555';
-    ctx.fillRect(roadX, 0, roadWidthPx, canvas.height);
-
-    // 車線の白線
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 3;
-    ctx.setLineDash([20, 20]);
-
-    for (let i = 1; i < roadLanes; i++) {
-        const laneX = roadX + (roadWidthPx / roadLanes) * i;
-        ctx.beginPath();
-        ctx.moveTo(laneX, -roadOffset);
-        ctx.lineTo(laneX, canvas.height - roadOffset);
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.moveTo(laneX, -roadOffset + canvas.height);
-        ctx.lineTo(laneX, canvas.height * 2 - roadOffset);
-        ctx.stroke();
+    createBoard() {
+        return Array.from({ length: ROWS }, () => Array(COLS).fill(0));
     }
 
-    ctx.setLineDash([]);
+    // ブロック画像の読み込み
+    loadBlockImages() {
+        // デフォルトでは色で描画
+        // カスタム画像を使う場合は、imagesフォルダに以下のファイルを配置:
+        // block_1.png, block_2.png, block_3.png, block_4.png,
+        // block_5.png, block_6.png, block_7.png
 
-    // 路肩の線
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.moveTo(roadX, 0);
-    ctx.lineTo(roadX, canvas.height);
-    ctx.stroke();
+        const imagePromises = [];
+        for (let i = 1; i <= 7; i++) {
+            const img = new Image();
+            imagePromises.push(
+                new Promise((resolve) => {
+                    img.onload = () => {
+                        this.blockImages[i] = img;
+                        resolve();
+                    };
+                    img.onerror = () => {
+                        // 画像が読み込めない場合は色で描画
+                        this.blockImages[i] = null;
+                        resolve();
+                    };
+                    img.src = `images/block_${i}.png`;
+                })
+            );
+        }
 
-    ctx.beginPath();
-    ctx.moveTo(roadX + roadWidthPx, 0);
-    ctx.lineTo(roadX + roadWidthPx, canvas.height);
-    ctx.stroke();
-}
-
-// プレイヤーを描画
-function drawPlayer() {
-    // 無敵時間中は点滅
-    if (invincible && Math.floor(invincibleTimer / 10) % 2 === 0) {
-        ctx.globalAlpha = 0.5;
+        Promise.all(imagePromises).then(() => {
+            this.imagesLoaded = true;
+            console.log('ブロック画像の読み込みが完了しました');
+        });
     }
 
-    // 画像がある場合は画像を描画、ない場合はデフォルトの車を描画
-    if (player.useImage && player.image) {
-        ctx.drawImage(player.image, player.x, player.y, player.width, player.height);
-    } else {
-        // デバッグ用の境界線
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(player.x, player.y, player.width, player.height);
+    // オーディオの設定
+    setupAudio() {
+        // BGM
+        this.bgm = new Audio('sounds/bgm.mp3');
+        this.bgm.loop = true;
+        this.bgm.volume = 0.3;
 
-        // 車体（明るい青）
-        ctx.fillStyle = '#3498db';
-        ctx.fillRect(player.x, player.y, player.width, player.height);
+        // 効果音
+        this.sounds.move = new Audio('sounds/move.mp3');
+        this.sounds.rotate = new Audio('sounds/rotate.mp3');
+        this.sounds.drop = new Audio('sounds/drop.mp3');
+        this.sounds.clear = new Audio('sounds/clear.mp3');
+        this.sounds.gameOver = new Audio('sounds/gameover.mp3');
 
-        // 窓（水色）
-        ctx.fillStyle = '#5dade2';
-        ctx.fillRect(player.x + 5, player.y + 10, player.width - 10, player.height * 0.3);
-
-        // フロントガラス部分（明るい水色）
-        ctx.fillStyle = '#85c1e9';
-        ctx.fillRect(player.x + 8, player.y + player.height * 0.5, player.width - 16, player.height * 0.2);
-
-        // ライト（黄色）
-        ctx.fillStyle = '#f1c40f';
-        ctx.fillRect(player.x + 5, player.y + player.height - 8, 10, 6);
-        ctx.fillRect(player.x + player.width - 15, player.y + player.height - 8, 10, 6);
+        // 音量設定
+        Object.values(this.sounds).forEach(sound => {
+            sound.volume = 0.5;
+        });
     }
 
-    ctx.globalAlpha = 1.0;
-}
-
-// 障害物を描画
-function drawObstacle(obstacle) {
-    // 衝突時の点滅エフェクト
-    if (obstacle.hit && obstacle.blinkTimer > 0) {
-        if (Math.floor(obstacle.blinkTimer / 3) % 2 === 0) {
-            ctx.globalAlpha = 0.3;
+    playSound(soundName) {
+        if (this.sounds[soundName]) {
+            const sound = this.sounds[soundName].cloneNode();
+            sound.play().catch(e => console.log('音声再生エラー:', e));
         }
     }
 
-    // 画像がある場合は画像を描画、ない場合はデフォルトの車を描画
-    if (obstacleImageLoaded) {
-        ctx.drawImage(obstacleImage, obstacle.x, obstacle.y, obstacle.width, obstacle.height);
-    } else {
-        // 車体
-        ctx.fillStyle = obstacle.color;
-        ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+    setupControls() {
+        document.addEventListener('keydown', (e) => {
+            if (this.gameOver) return;
 
-        // 窓
-        ctx.fillStyle = '#34495e';
-        ctx.fillRect(obstacle.x + 5, obstacle.y + obstacle.height * 0.6, obstacle.width - 10, obstacle.height * 0.3);
+            switch(e.key) {
+                case 'ArrowLeft':
+                    this.movePiece(-1);
+                    this.playSound('move');
+                    break;
+                case 'ArrowRight':
+                    this.movePiece(1);
+                    this.playSound('move');
+                    break;
+                case 'ArrowDown':
+                    this.dropPiece();
+                    break;
+                case 'ArrowUp':
+                case ' ':
+                    this.rotatePiece();
+                    this.playSound('rotate');
+                    e.preventDefault();
+                    break;
+            }
 
-        // ライト
-        ctx.fillStyle = '#e74c3c';
-        ctx.fillRect(obstacle.x + 5, obstacle.y + 5, 8, 5);
-        ctx.fillRect(obstacle.x + obstacle.width - 13, obstacle.y + 5, 8, 5);
+            this.draw();
+        });
+
+        // ボタンイベント
+        document.getElementById('startBtn').addEventListener('click', () => {
+            this.start();
+        });
+
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            this.reset();
+        });
+
+        document.getElementById('restartBtn').addEventListener('click', () => {
+            this.reset();
+            this.start();
+        });
+
+        // タッチ/クリックコントロール
+        this.setupTouchControls();
     }
 
-    ctx.globalAlpha = 1.0;
-}
+    setupTouchControls() {
+        const leftBtn = document.getElementById('leftBtn');
+        const rightBtn = document.getElementById('rightBtn');
+        const downBtn = document.getElementById('downBtn');
+        const rotateBtn = document.getElementById('rotateBtn');
 
-// 障害物を生成
-function spawnObstacle() {
-    const roadX = canvas.width * (1 - roadWidth) / 2;
-    const roadWidthPx = canvas.width * roadWidth;
-    const laneWidth = roadWidthPx / roadLanes;
-    const lane = Math.floor(Math.random() * roadLanes);
-    const laneX = roadX + laneWidth * lane + laneWidth / 2;
+        // 左ボタン
+        leftBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (!this.gameOver && this.currentPiece) {
+                this.movePiece(-1);
+                this.playSound('move');
+                this.draw();
+            }
+        });
 
-    const colors = ['#e74c3c', '#e67e22', '#9b59b6', '#2c3e50'];
+        leftBtn.addEventListener('click', (e) => {
+            if (!this.gameOver && this.currentPiece) {
+                this.movePiece(-1);
+                this.playSound('move');
+                this.draw();
+            }
+        });
 
-    obstacles.push({
-        x: laneX - 40,
-        y: -80,
-        width: 80,
-        height: 80,
-        color: colors[Math.floor(Math.random() * colors.length)],
-        hit: false,
-        blinkTimer: 0
-    });
-}
+        // 右ボタン
+        rightBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (!this.gameOver && this.currentPiece) {
+                this.movePiece(1);
+                this.playSound('move');
+                this.draw();
+            }
+        });
 
-// 衝突判定
-function checkCollision(rect1, rect2) {
-    return rect1.x < rect2.x + rect2.width &&
-           rect1.x + rect1.width > rect2.x &&
-           rect1.y < rect2.y + rect2.height &&
-           rect1.y + rect1.height > rect2.y;
-}
+        rightBtn.addEventListener('click', (e) => {
+            if (!this.gameOver && this.currentPiece) {
+                this.movePiece(1);
+                this.playSound('move');
+                this.draw();
+            }
+        });
 
-// 道路内に収める
-function keepPlayerOnRoad() {
-    const roadX = canvas.width * (1 - roadWidth) / 2;
-    const roadWidthPx = canvas.width * roadWidth;
+        // 下ボタン
+        downBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (!this.gameOver && this.currentPiece) {
+                this.dropPiece();
+                this.draw();
+            }
+        });
 
-    if (player.targetX < roadX) {
-        player.targetX = roadX;
+        downBtn.addEventListener('click', (e) => {
+            if (!this.gameOver && this.currentPiece) {
+                this.dropPiece();
+                this.draw();
+            }
+        });
+
+        // 回転ボタン
+        rotateBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (!this.gameOver && this.currentPiece) {
+                this.rotatePiece();
+                this.playSound('rotate');
+                this.draw();
+            }
+        });
+
+        rotateBtn.addEventListener('click', (e) => {
+            if (!this.gameOver && this.currentPiece) {
+                this.rotatePiece();
+                this.playSound('rotate');
+                this.draw();
+            }
+        });
+
+        // ボタンの有効/無効化を管理
+        this.updateTouchControls();
     }
-    if (player.targetX + player.width > roadX + roadWidthPx) {
-        player.targetX = roadX + roadWidthPx - player.width;
+
+    updateTouchControls() {
+        const buttons = [
+            document.getElementById('leftBtn'),
+            document.getElementById('rightBtn'),
+            document.getElementById('downBtn'),
+            document.getElementById('rotateBtn')
+        ];
+
+        buttons.forEach(btn => {
+            // ゲームオーバーの時のみ無効化
+            btn.disabled = this.gameOver;
+        });
+    }
+
+    start() {
+        if (this.gameOver) {
+            this.reset();
+        }
+
+        this.bgm.play().catch(e => console.log('BGM再生エラー:', e));
+        this.nextPiece = this.createPiece();
+        this.spawnPiece();
+        this.lastTime = performance.now();
+        this.update(this.lastTime);
+
+        document.getElementById('startBtn').disabled = true;
+        this.updateTouchControls();
+    }
+
+    reset() {
+        this.board = this.createBoard();
+        this.score = 0;
+        this.level = 1;
+        this.lines = 0;
+        this.gameOver = false;
+        this.dropCounter = 0;
+        this.dropInterval = 1000;
+        this.currentPiece = null;
+        this.nextPiece = null;
+
+        this.updateScore();
+        this.draw();
+
+        document.getElementById('gameOver').classList.add('hidden');
+        document.getElementById('startBtn').disabled = false;
+
+        this.bgm.pause();
+        this.bgm.currentTime = 0;
+
+        this.updateTouchControls();
+    }
+
+    createPiece() {
+        const type = Math.floor(Math.random() * 7) + 1;
+        return {
+            shape: SHAPES[type],
+            type: type,
+            x: Math.floor(COLS / 2) - Math.floor(SHAPES[type][0].length / 2),
+            y: 0
+        };
+    }
+
+    spawnPiece() {
+        this.currentPiece = this.nextPiece;
+        this.nextPiece = this.createPiece();
+
+        if (this.checkCollision(this.currentPiece, this.currentPiece.x, this.currentPiece.y)) {
+            this.endGame();
+        }
+
+        this.drawNext();
+        this.updateTouchControls();
+    }
+
+    movePiece(dir) {
+        const newX = this.currentPiece.x + dir;
+        if (!this.checkCollision(this.currentPiece, newX, this.currentPiece.y)) {
+            this.currentPiece.x = newX;
+        }
+    }
+
+    dropPiece() {
+        const newY = this.currentPiece.y + 1;
+        if (!this.checkCollision(this.currentPiece, this.currentPiece.x, newY)) {
+            this.currentPiece.y = newY;
+            this.dropCounter = 0;
+        } else {
+            this.lockPiece();
+        }
+    }
+
+    rotatePiece() {
+        const rotated = this.rotate(this.currentPiece.shape);
+        const originalShape = this.currentPiece.shape;
+
+        this.currentPiece.shape = rotated;
+
+        if (this.checkCollision(this.currentPiece, this.currentPiece.x, this.currentPiece.y)) {
+            this.currentPiece.shape = originalShape;
+        }
+    }
+
+    rotate(shape) {
+        const rotated = [];
+        for (let i = 0; i < shape[0].length; i++) {
+            const row = [];
+            for (let j = shape.length - 1; j >= 0; j--) {
+                row.push(shape[j][i]);
+            }
+            rotated.push(row);
+        }
+        return rotated;
+    }
+
+    checkCollision(piece, x, y) {
+        for (let row = 0; row < piece.shape.length; row++) {
+            for (let col = 0; col < piece.shape[row].length; col++) {
+                if (piece.shape[row][col]) {
+                    const newX = x + col;
+                    const newY = y + row;
+
+                    if (newX < 0 || newX >= COLS || newY >= ROWS) {
+                        return true;
+                    }
+
+                    if (newY >= 0 && this.board[newY][newX]) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    lockPiece() {
+        for (let row = 0; row < this.currentPiece.shape.length; row++) {
+            for (let col = 0; col < this.currentPiece.shape[row].length; col++) {
+                if (this.currentPiece.shape[row][col]) {
+                    const y = this.currentPiece.y + row;
+                    const x = this.currentPiece.x + col;
+                    if (y >= 0) {
+                        this.board[y][x] = this.currentPiece.type;
+                    }
+                }
+            }
+        }
+
+        this.playSound('drop');
+        this.clearLines();
+        this.spawnPiece();
+    }
+
+    clearLines() {
+        let linesCleared = 0;
+
+        for (let row = ROWS - 1; row >= 0; row--) {
+            if (this.board[row].every(cell => cell !== 0)) {
+                this.board.splice(row, 1);
+                this.board.unshift(Array(COLS).fill(0));
+                linesCleared++;
+                row++;
+            }
+        }
+
+        if (linesCleared > 0) {
+            this.playSound('clear');
+            this.lines += linesCleared;
+            this.score += linesCleared * 100 * this.level;
+            this.level = Math.floor(this.lines / 10) + 1;
+            this.dropInterval = Math.max(100, 1000 - (this.level - 1) * 100);
+            this.updateScore();
+        }
+    }
+
+    updateScore() {
+        document.getElementById('score').textContent = this.score;
+        document.getElementById('level').textContent = this.level;
+        document.getElementById('lines').textContent = this.lines;
+    }
+
+    endGame() {
+        this.gameOver = true;
+        this.bgm.pause();
+        this.playSound('gameOver');
+
+        document.getElementById('finalScore').textContent = this.score;
+        document.getElementById('gameOver').classList.remove('hidden');
+        this.updateTouchControls();
+    }
+
+    update(time = 0) {
+        if (this.gameOver) return;
+
+        const deltaTime = time - this.lastTime;
+        this.lastTime = time;
+        this.dropCounter += deltaTime;
+
+        if (this.dropCounter > this.dropInterval) {
+            this.dropPiece();
+            this.dropCounter = 0;
+        }
+
+        this.draw();
+        requestAnimationFrame((t) => this.update(t));
+    }
+
+    drawBlock(x, y, type) {
+        const px = x * BLOCK_SIZE;
+        const py = y * BLOCK_SIZE;
+
+        // カスタム画像が読み込まれていれば使用
+        if (this.imagesLoaded && this.blockImages[type]) {
+            this.ctx.drawImage(this.blockImages[type], px, py, BLOCK_SIZE, BLOCK_SIZE);
+        } else {
+            // 画像がない場合は色で描画
+            this.ctx.fillStyle = COLORS[type];
+            this.ctx.fillRect(px, py, BLOCK_SIZE, BLOCK_SIZE);
+
+            // グラデーション効果
+            this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            this.ctx.lineWidth = 2;
+            this.ctx.strokeRect(px + 1, py + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2);
+
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+            this.ctx.fillRect(px + BLOCK_SIZE - 4, py + 4, 4, BLOCK_SIZE - 4);
+            this.ctx.fillRect(px + 4, py + BLOCK_SIZE - 4, BLOCK_SIZE - 4, 4);
+        }
+    }
+
+    draw() {
+        // ボードをクリア
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // グリッド描画
+        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+        this.ctx.lineWidth = 1;
+        for (let i = 0; i <= COLS; i++) {
+            this.ctx.beginPath();
+            this.ctx.moveTo(i * BLOCK_SIZE, 0);
+            this.ctx.lineTo(i * BLOCK_SIZE, ROWS * BLOCK_SIZE);
+            this.ctx.stroke();
+        }
+        for (let i = 0; i <= ROWS; i++) {
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, i * BLOCK_SIZE);
+            this.ctx.lineTo(COLS * BLOCK_SIZE, i * BLOCK_SIZE);
+            this.ctx.stroke();
+        }
+
+        // ボードを描画
+        for (let row = 0; row < ROWS; row++) {
+            for (let col = 0; col < COLS; col++) {
+                if (this.board[row][col]) {
+                    this.drawBlock(col, row, this.board[row][col]);
+                }
+            }
+        }
+
+        // 現在のピースを描画
+        if (this.currentPiece) {
+            for (let row = 0; row < this.currentPiece.shape.length; row++) {
+                for (let col = 0; col < this.currentPiece.shape[row].length; col++) {
+                    if (this.currentPiece.shape[row][col]) {
+                        this.drawBlock(
+                            this.currentPiece.x + col,
+                            this.currentPiece.y + row,
+                            this.currentPiece.type
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    drawNext() {
+        this.nextCtx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        this.nextCtx.fillRect(0, 0, this.nextCanvas.width, this.nextCanvas.height);
+
+        if (!this.nextPiece) return;
+
+        const offsetX = (4 - this.nextPiece.shape[0].length) * BLOCK_SIZE / 2;
+        const offsetY = (4 - this.nextPiece.shape.length) * BLOCK_SIZE / 2;
+
+        for (let row = 0; row < this.nextPiece.shape.length; row++) {
+            for (let col = 0; col < this.nextPiece.shape[row].length; col++) {
+                if (this.nextPiece.shape[row][col]) {
+                    const px = offsetX + col * BLOCK_SIZE;
+                    const py = offsetY + row * BLOCK_SIZE;
+
+                    if (this.imagesLoaded && this.blockImages[this.nextPiece.type]) {
+                        this.nextCtx.drawImage(
+                            this.blockImages[this.nextPiece.type],
+                            px, py, BLOCK_SIZE, BLOCK_SIZE
+                        );
+                    } else {
+                        this.nextCtx.fillStyle = COLORS[this.nextPiece.type];
+                        this.nextCtx.fillRect(px, py, BLOCK_SIZE, BLOCK_SIZE);
+
+                        this.nextCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                        this.nextCtx.lineWidth = 2;
+                        this.nextCtx.strokeRect(px + 1, py + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2);
+                    }
+                }
+            }
+        }
     }
 }
-
-// マウス/タッチ操作
-function handlePointerMove(e) {
-    if (gameState !== 'playing') return;
-
-    let clientX;
-    if (e.touches) {
-        clientX = e.touches[0].clientX;
-    } else {
-        clientX = e.clientX;
-    }
-
-    const rect = canvas.getBoundingClientRect();
-    const canvasX = clientX - rect.left;
-
-    player.targetX = canvasX - player.width / 2;
-    keepPlayerOnRoad();
-}
-
-canvas.addEventListener('mousemove', handlePointerMove);
-canvas.addEventListener('touchmove', handlePointerMove);
 
 // ゲーム開始
-startBtn.addEventListener('click', () => {
-    startScreen.style.display = 'none';
-    gameState = 'playing';
-    resizeCanvas(); // キャンバスサイズを確実に設定
-    init();
-    playBGM(); // BGMを再生
-    gameLoop();
-});
-
-// リスタート
-restartBtn.addEventListener('click', () => {
-    gameOverScreen.style.display = 'none';
-    gameState = 'playing';
-    resizeCanvas(); // キャンバスサイズを確実に設定
-    init();
-    playBGM(); // BGMを再生
-    gameLoop();
-});
-
-// ゲームループ
-function gameLoop() {
-    if (gameState !== 'playing') return;
-
-    // クリア
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // 道路のアニメーション（減速効果を適用）
-    roadOffset += gameSpeed * player.slowdown;
-    if (roadOffset >= canvas.height) {
-        roadOffset = 0;
-    }
-
-    // 減速効果を徐々に元に戻す
-    if (player.slowdown < 1.0) {
-        player.slowdown += 0.01; // ゆっくり加速（0.02→0.01）
-        if (player.slowdown > 1.0) {
-            player.slowdown = 1.0;
-        }
-    }
-
-    // 描画
-    drawRoad();
-
-    // プレイヤーの移動（スムーズに追従）
-    player.x += (player.targetX - player.x) * player.speed;
-    drawPlayer();
-
-    // 障害物の生成
-    obstacleSpawnTimer.current++;
-    if (obstacleSpawnTimer.current >= obstacleSpawnTimer.interval) {
-        spawnObstacle();
-        obstacleSpawnTimer.current = 0;
-
-        // 難易度を徐々に上げる（子供向けに控えめに）
-        if (obstacleSpawnTimer.interval > 120) {
-            obstacleSpawnTimer.interval -= 0.3;
-        }
-        if (gameSpeed < 6) {
-            gameSpeed += 0.02;
-        }
-    }
-
-    // 無敵時間のタイマー
-    if (invincible) {
-        invincibleTimer--;
-        if (invincibleTimer <= 0) {
-            invincible = false;
-        }
-    }
-
-    // 障害物の更新と描画
-    for (let i = obstacles.length - 1; i >= 0; i--) {
-        const obstacle = obstacles[i];
-        obstacle.y += gameSpeed * player.slowdown; // 減速効果を適用
-
-        // 点滅タイマーの更新
-        if (obstacle.hit) {
-            obstacle.blinkTimer--;
-            if (obstacle.blinkTimer <= 0) {
-                obstacles.splice(i, 1);
-                continue;
-            }
-        }
-
-        drawObstacle(obstacle);
-
-        // 衝突判定（無敵時間でなく、まだ衝突していない障害物のみ）
-        if (!invincible && !obstacle.hit && checkCollision(player, obstacle)) {
-            // 効果音を鳴らす
-            playCollisionSound();
-
-            // 障害物を点滅させて消す
-            obstacle.hit = true;
-            obstacle.blinkTimer = 30; // 30フレーム点滅
-
-            // ライフを減らす
-            lives--;
-            updateLivesDisplay();
-
-            // 無敵時間を設定
-            invincible = true;
-            invincibleTimer = 90; // 90フレーム（約1.5秒）
-
-            // 車を減速させる
-            player.slowdown = 0.15; // 15%まで大幅減速（0.3→0.15）
-
-            // ライフが0になったらゲームオーバー
-            if (lives <= 0) {
-                gameState = 'gameOver';
-                finalScoreElement.textContent = score;
-                gameOverScreen.style.display = 'block';
-                stopBGM(); // BGMを停止
-                return;
-            }
-        }
-
-        // 画面外に出た障害物を削除
-        if (obstacle.y > canvas.height && !obstacle.hit) {
-            obstacles.splice(i, 1);
-            score += 10;
-            scoreElement.textContent = score;
-        }
-    }
-
-    requestAnimationFrame(gameLoop);
-}
-
-// 初期化
-init();
+const game = new Game();
